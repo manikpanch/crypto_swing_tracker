@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useMemo, useRef } from 'react';
-import { fetchTickerHistory } from './services/geminiService';
+import { fetchTickerHistory, fetchSwingsContext } from './services/geminiService';
 import { PricePoint, MovementEvent, MovementType, AnalysisResult } from './types';
 import PriceChart from './components/PriceChart';
 import { 
@@ -15,7 +15,8 @@ import {
   BarChart3,
   Search,
   Download,
-  Coins
+  Coins,
+  Zap
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -30,6 +31,10 @@ const App: React.FC = () => {
   const reportRef = useRef<HTMLDivElement>(null);
 
   const performAnalysis = useCallback(async () => {
+    // 1. Restriction: Not less than 2%
+    const validatedPercentage = Math.max(2, percentage);
+    setPercentage(validatedPercentage);
+
     setLoading(true);
     setError(null);
     try {
@@ -38,8 +43,8 @@ const App: React.FC = () => {
         throw new Error(`Insufficient data found for ${ticker} in ${year}.`);
       }
 
-      const target = percentage / 100;
-      const movements: MovementEvent[] = [];
+      const target = validatedPercentage / 100;
+      let movements: MovementEvent[] = [];
       let baseIndex = 0;
 
       for (let i = 1; i < data.length; i++) {
@@ -61,10 +66,22 @@ const App: React.FC = () => {
         }
       }
 
+      // 2. Fetch Macro/Micro Context for these movements
+      if (movements.length > 0) {
+        // Limit context fetching to a reasonable number to avoid long waits/timeouts
+        const movementsToContextualize = movements.slice(0, 15);
+        const contexts = await fetchSwingsContext(ticker.toUpperCase(), movementsToContextualize);
+        
+        movements = movements.map((m, idx) => ({
+          ...m,
+          context: contexts[idx] || (idx >= 15 ? "Detailed context limited to first 15 swings." : "No specific events identified.")
+        }));
+      }
+
       setResult({
         ticker: ticker.toUpperCase(),
         year,
-        targetPercentage: percentage,
+        targetPercentage: validatedPercentage,
         data,
         movements
       });
@@ -170,10 +187,11 @@ const App: React.FC = () => {
               <input 
                 type="number" 
                 value={percentage} 
+                min="2"
                 onChange={(e) => setPercentage(parseFloat(e.target.value))}
                 className="bg-transparent border-none focus:outline-none w-12 text-white font-medium text-sm"
               />
-              <span className="text-slate-500 text-xs font-bold uppercase">Threshold</span>
+              <span className="text-slate-500 text-xs font-bold uppercase tracking-tight">Threshold (Min 2%)</span>
             </div>
 
             <button 
@@ -220,7 +238,7 @@ const App: React.FC = () => {
             </div>
             <div className="text-center">
               <p className="text-white font-bold text-xl">Processing Request</p>
-              <p className="text-slate-500 mt-1">Grounding and analyzing {ticker} for {year}...</p>
+              <p className="text-slate-500 mt-1">Grounding {ticker} data and researching events for {year}...</p>
             </div>
           </div>
         )}
@@ -336,14 +354,20 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Detailed Feed - Restored dates and original detailed format */}
+            {/* Detailed Feed - Restored dates and now including macro/micro context */}
             <div className="space-y-6">
-              <h2 className="text-2xl font-bold text-white px-2">Detailed Swing Timeline</h2>
+              <div className="flex items-center justify-between px-2">
+                <h2 className="text-2xl font-bold text-white">Detailed Swing Timeline</h2>
+                <div className="flex items-center gap-2 text-slate-500 text-xs font-bold uppercase">
+                  <Zap size={14} className="text-yellow-500" />
+                  <span>Includes Macro/Micro Context</span>
+                </div>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {result.movements.map((move, idx) => (
                   <div 
                     key={idx} 
-                    className={`group relative overflow-hidden p-6 rounded-3xl border transition-all duration-300 hover:scale-[1.02] ${
+                    className={`group relative overflow-hidden p-6 rounded-3xl border transition-all duration-300 hover:scale-[1.02] flex flex-col ${
                       move.type === MovementType.UP 
                       ? 'bg-emerald-500/5 border-emerald-500/20 hover:border-emerald-500/40' 
                       : 'bg-rose-500/5 border-rose-500/20 hover:border-rose-500/40'
@@ -360,7 +384,8 @@ const App: React.FC = () => {
                         {move.daysTaken} {move.daysTaken === 1 ? 'DAY' : 'DAYS'}
                       </div>
                     </div>
-                    <div className="flex items-center justify-between relative z-10">
+                    
+                    <div className="flex items-center justify-between relative z-10 mb-6">
                       <div>
                         <p className="text-[10px] text-slate-500 font-black uppercase mb-1">Start Point</p>
                         <p className="text-xs font-bold text-slate-400 mb-0.5">{move.startDate}</p>
@@ -375,6 +400,17 @@ const App: React.FC = () => {
                         <p className="text-lg font-black text-white">${move.endPrice.toLocaleString()}</p>
                       </div>
                     </div>
+
+                    {move.context && (
+                      <div className="mt-auto pt-4 border-t border-slate-800/50">
+                        <div className="flex items-start gap-2">
+                          <Zap size={12} className="text-yellow-500 mt-1 shrink-0" />
+                          <p className="text-[11px] leading-relaxed text-slate-400 font-medium italic">
+                            {move.context}
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -383,7 +419,7 @@ const App: React.FC = () => {
             {/* Footer */}
             <div className="pt-8 border-t border-slate-800 text-center pb-8">
               <p className="text-[10px] text-slate-600 uppercase tracking-[0.2em] font-bold">
-                Generated by Crypto Swing Tracker Engine • Verified Data via Gemini Pro
+                Generated by Crypto Swing Tracker Engine • Data & Context Grounded by Gemini Search
               </p>
             </div>
           </div>

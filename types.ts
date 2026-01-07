@@ -17,6 +17,7 @@ export interface MovementEvent {
   type: MovementType;
   percentageChange: number;
   daysTaken: number;
+  context?: string; // New field for macro/micro events
 }
 
 export interface AnalysisResult {
