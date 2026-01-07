@@ -1,0 +1,5 @@
+{
+  "name": "BTC Swing Tracker",
+  "description": "Analyze Bitcoin price movements for specific years and target percentage thresholds, identifying 'Up' or 'Down' swings and the time taken to achieve them.",
+  "requestFramePermissions": []
+}
