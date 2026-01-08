@@ -8,7 +8,7 @@ export const fetchTickerHistory = async (ticker: string, year: number): Promise<
   const currentDate = new Date().toISOString().split('T')[0];
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
+    model: 'gemini-3-flash-preview',
     contents: `Provide actual historical daily closing prices for the asset "${ticker}" for the year ${year}. 
     ${isCurrentYear ? `Since it is the current year, provide data from January 1st up to ${currentDate}.` : `Provide data for the full year.`}
     Prices must be at 00:00 ET (Daily Close). 
@@ -45,38 +45,40 @@ export const fetchTickerHistory = async (ticker: string, year: number): Promise<
   }
 };
 
-export const fetchSwingsContext = async (ticker: string, movements: MovementEvent[]): Promise<string[]> => {
-  if (movements.length === 0) return [];
-  
+/**
+ * Fetches context for a SINGLE movement event. 
+ * Strictly limits the summary to 50 words or fewer.
+ */
+export const fetchSingleMovementContext = async (ticker: string, move: MovementEvent): Promise<string> => {
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   
-  // Format movement ranges for the prompt
-  const ranges = movements.map((m, i) => `${i + 1}. ${m.startDate} to ${m.endDate}`).join('\n');
+  const prompt = `Research and explain why the price of ${ticker} moved ${move.type} by ${Math.abs(move.percentageChange).toFixed(2)}% between ${move.startDate} and ${move.endDate}.
+  The price went from $${move.startPrice.toLocaleString()} to $${move.endPrice.toLocaleString()}.
+  Identify specific macro or micro events (news, Fed decisions, hacks, ETF flows) that directly contributed to this ${move.type} movement.
+  
+  STRICT INSTRUCTION: Provide a concise summary of NO MORE THAN 50 WORDS. Do not use filler phrases. Focus solely on causes for the ${move.type} direction.`;
 
   const response = await ai.models.generateContent({
     model: 'gemini-3-pro-preview',
-    contents: `For the ticker "${ticker}", explain what significant macro or micro events (news, CPI data, ETF approvals, hacks, Fed meetings, etc.) occurred during these specific date ranges that likely influenced the price swings. 
-    Provide a concise, 1-sentence explanation for EACH range.
-    
-    Date Ranges:
-    ${ranges}
-    
-    Return the output as a JSON array of strings, where each index matches the range provided above.`,
+    contents: prompt,
     config: {
       tools: [{ googleSearch: {} }],
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.ARRAY,
-        items: { type: Type.STRING }
-      }
+      systemInstruction: "You are a concise financial analyst. Your responses MUST NEVER exceed 50 words. Be direct and strictly focused on the requested price direction."
     }
   });
 
   try {
-    const text = response.text || '[]';
-    return JSON.parse(text);
+    let result = response.text?.trim() || "No specific event data identified for this movement.";
+    
+    // Safety check: force truncation if the model ignores instructions
+    const words = result.split(/\s+/);
+    if (words.length > 50) {
+        return words.slice(0, 50).join(' ') + '...';
+    }
+    
+    return result;
   } catch (error) {
-    console.error("Error fetching context:", error);
-    return movements.map(() => "No specific event data found for this period.");
+    console.error("Error fetching individual context:", error);
+    return "Event research failed for this period.";
   }
 };
